@@ -29,7 +29,7 @@ jobs:
           sudo apt-get install -y libxcb-util0-dev libxcb-xinerama0-dev libxcb-xkb-dev
           sudo apt-get install -y libxcb-xrm-dev libxcb-cursor-dev libxcb-keysyms1-dev
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev
-          sudo apt-get install -y libgdk-pixbuf-2.0-dev libglib2.0-dev
+          sudo apt-get install -y libgdk-pixbuf2.0-dev libglib2.0-dev
           sudo apt-get install -y flex bison
 
       - name: Install check 0.14.0
