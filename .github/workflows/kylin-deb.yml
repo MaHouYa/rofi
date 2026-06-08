@@ -32,21 +32,22 @@ jobs:
           sudo apt-get install -y libgdk-pixbuf2.0-dev libglib2.0-dev
           sudo apt-get install -y flex bison
 
-      - name: Install check 0.14.0
+      - name: Build xcb-imdkit
         run: |
-          curl -L https://github.com/libcheck/check/releases/download/0.14.0/check-0.14.0.tar.gz | tar xzf -
-          cd check-0.14.0
-          ./configure
-          make
-          sudo make install
-          sudo ldconfig
+          curl -L https://github.com/fcitx/xcb-imdkit/archive/refs/tags/1.0.3.tar.gz | tar xzf -
+          cd xcb-imdkit-1.0.3
+          mkdir build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/.local -DBUILD_SHARED_LIBS=OFF
+          make -j$(nproc)
+          make install
 
       - name: Build rofi
         run: |
+          export PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig:$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
           autoreconf --install
           mkdir builddir
           cd builddir
-          ../configure --enable-windowmode
+          ../configure --enable-windowmode --enable-imdkit --disable-check
           make -j$(nproc)
 
       - name: Build Debian package
@@ -56,7 +57,7 @@ jobs:
           mkdir -p deb-root/DEBIAN
           cat > deb-root/DEBIAN/control << 'CONTROL'
           Package: rofi
-          Version: 1.7.9
+          Version: 1.7.5
           Section: x11
           Priority: optional
           Architecture: amd64
@@ -66,12 +67,12 @@ jobs:
            libxcb-cursor0, libxcb-ewmh2, libxcb-icccm4, libxcb-keysyms1,
            libxcb-randr0, libxcb-util1, libxcb-xinerama0, libxcb-xkb1,
            libxcb-xrm0, libxcb1, libxkbcommon-x11-0, libxkbcommon0
-          Description: A window switcher, application launcher and dmenu replacement
+          Description: A window switcher, application launcher and dmenu replacement (with IME support)
           CONTROL
-          dpkg-deb --build deb-root rofi_1.7.9_amd64.deb
+          dpkg-deb --build deb-root rofi_1.7.5_amd64.deb
 
       - name: Upload Kylin Debian package
         uses: actions/upload-artifact@v4
         with:
           name: rofi-kylin-deb
-          path: builddir/rofi_1.7.9_amd64.deb
+          path: builddir/rofi_1.7.5_amd64.deb
