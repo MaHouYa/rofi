@@ -44,6 +44,8 @@ static void textbox_draw(widget *, cairo_t *);
 static void textbox_free(widget *);
 static int textbox_get_width(widget *);
 static int _textbox_get_height(widget *);
+static int textbox_get_layout_x(const textbox *tb, int line_width,
+                                int dot_offset);
 static void __textbox_update_pango_text(textbox *tb);
 
 /** Default pango context */
@@ -449,6 +451,22 @@ static void textbox_free(widget *wid) {
   g_slice_free(textbox, tb);
 }
 
+static int textbox_get_layout_x(const textbox *tb, int line_width,
+                                int dot_offset) {
+  int rem =
+      MAX(0, tb->widget.w - widget_padding_get_padding_width(WIDGET(tb)) -
+                 line_width - dot_offset);
+
+  switch (pango_layout_get_alignment(tb->layout)) {
+  case PANGO_ALIGN_CENTER:
+    return (tb->xalign - 0.5) * rem + widget_padding_get_left(WIDGET(tb));
+  case PANGO_ALIGN_RIGHT:
+    return -(1.0 - tb->xalign) * rem + widget_padding_get_left(WIDGET(tb));
+  default:
+    return tb->xalign * rem + widget_padding_get_left(WIDGET(tb)) + dot_offset;
+  }
+}
+
 static void textbox_draw(widget *wid, cairo_t *draw) {
   if (wid == NULL) {
     return;
@@ -486,33 +504,8 @@ static void textbox_draw(widget *wid, cairo_t *draw) {
   }
   // Set ARGB
   // We need to set over, otherwise subpixel hinting wont work.
-  switch (pango_layout_get_alignment(tb->layout)) {
-  case PANGO_ALIGN_CENTER: {
-    int rem =
-        MAX(0, tb->widget.w - widget_padding_get_padding_width(WIDGET(tb)) -
-                   line_width - dot_offset);
-    x = (tb->xalign - 0.5) * rem + widget_padding_get_left(WIDGET(tb));
-    cairo_move_to(draw, x, top);
-    break;
-  }
-  case PANGO_ALIGN_RIGHT: {
-    int rem =
-        MAX(0, tb->widget.w - widget_padding_get_padding_width(WIDGET(tb)) -
-                   line_width - dot_offset);
-    x = -(1.0 - tb->xalign) * rem + widget_padding_get_left(WIDGET(tb));
-    cairo_move_to(draw, x, top);
-    break;
-  }
-  default: {
-    int rem =
-        MAX(0, tb->widget.w - widget_padding_get_padding_width(WIDGET(tb)) -
-                   line_width - dot_offset);
-    x = tb->xalign * rem + widget_padding_get_left(WIDGET(tb));
-    x += dot_offset;
-    cairo_move_to(draw, x, top);
-    break;
-  }
-  }
+  x = textbox_get_layout_x(tb, line_width, dot_offset);
+  cairo_move_to(draw, x, top);
   cairo_save(draw);
   cairo_reset_clip(draw);
   pango_cairo_show_layout(draw, tb->layout);
@@ -987,4 +980,26 @@ void textbox_set_ellipsize(textbox *tb, PangoEllipsizeMode mode) {
       widget_queue_redraw(WIDGET(tb));
     }
   }
+}
+
+int textbox_get_cursor_x_pos(const textbox *tb) {
+  if (tb == NULL || tb->layout == NULL || (tb->flags & TB_EDITABLE) == 0) {
+    return 0;
+  }
+
+  int line_width = 0;
+  int line_height = 0;
+  pango_layout_get_pixel_size(tb->layout, &line_width, &line_height);
+
+  const char *text = pango_layout_get_text(tb->layout);
+  if (text == NULL) {
+    return textbox_get_layout_x(tb, line_width, 0);
+  }
+
+  int cursor_offset = MIN(tb->cursor, g_utf8_strlen(text, -1));
+  char *offset = g_utf8_offset_to_pointer(text, cursor_offset);
+  PangoRectangle pos;
+  pango_layout_get_cursor_pos(tb->layout, offset - text, &pos, NULL);
+
+  return textbox_get_layout_x(tb, line_width, 0) + pos.x / PANGO_SCALE;
 }
