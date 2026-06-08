@@ -30,14 +30,20 @@
 #define G_LOG_DOMAIN "X11Helper"
 
 #include "config.h"
+#ifdef XCB_IMDKIT
+#include <xcb-imdkit/encoding.h>
+#include <xcb/xcb_keysyms.h>
+#endif
 #include <cairo-xcb.h>
 #include <cairo.h>
 #include <glib.h>
 #include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <xcb/randr.h>
 #include <xcb/xcb.h>
@@ -84,6 +90,10 @@ WindowManagerQuirk current_window_manager = WM_EWHM;
  */
 struct _xcb_stuff xcb_int = {.connection = NULL,
                              .screen = NULL,
+#ifdef XCB_IMDKIT
+                             .im = NULL,
+                             .syms = NULL,
+#endif
                              .screen_nbr = -1,
                              .sndisplay = NULL,
                              .sncontext = NULL,
@@ -1141,6 +1151,34 @@ static gboolean x11_button_to_nk_bindings_scroll(guint32 x11_button,
   return TRUE;
 }
 
+static void rofi_key_press_event_handler(xcb_key_press_event_t *xkpe,
+                                         RofiViewState *state) {
+  gchar *text;
+  g_log("IMDKit", G_LOG_LEVEL_DEBUG, "press handler %d", xkpe->detail);
+
+  xcb->last_timestamp = xkpe->time;
+  if (config.xserver_i300_workaround) {
+    text = nk_bindings_seat_handle_key_with_modmask(
+        xcb->bindings_seat, NULL, xkpe->state, xkpe->detail,
+        NK_BINDINGS_KEY_STATE_PRESS);
+  } else {
+    text = nk_bindings_seat_handle_key(xcb->bindings_seat, NULL, xkpe->detail,
+                                       NK_BINDINGS_KEY_STATE_PRESS);
+  }
+  if (text != NULL) {
+    rofi_view_handle_text(state, text);
+    g_free(text);
+  }
+}
+
+static void rofi_key_release_event_handler(xcb_key_release_event_t *xkre,
+                                           G_GNUC_UNUSED RofiViewState *state) {
+  g_log("IMDKit", G_LOG_LEVEL_DEBUG, "release handler %d", xkre->detail);
+  xcb->last_timestamp = xkre->time;
+  nk_bindings_seat_handle_key(xcb->bindings_seat, NULL, xkre->detail,
+                              NK_BINDINGS_KEY_STATE_RELEASE);
+}
+
 /**
  * Process X11 events in the main-loop (gui-thread) of the application.
  */
@@ -1254,29 +1292,39 @@ static void main_loop_x11_event_handler_view(xcb_generic_event_t *event) {
   }
   case XCB_KEY_PRESS: {
     xcb_key_press_event_t *xkpe = (xcb_key_press_event_t *)event;
-    gchar *text;
-
-    xcb->last_timestamp = xkpe->time;
-    if ( config.xserver_i300_workaround ) {
-      text = nk_bindings_seat_handle_key_with_modmask(
-          xcb->bindings_seat, NULL, xkpe->state, xkpe->detail,
-          NK_BINDINGS_KEY_STATE_PRESS);
-    } else {
-      text = nk_bindings_seat_handle_key(
-          xcb->bindings_seat, NULL, xkpe->detail,
-          NK_BINDINGS_KEY_STATE_PRESS);
-    }
-    if (text != NULL) {
-      rofi_view_handle_text(state, text);
-      g_free(text);
+#ifdef XCB_IMDKIT
+    if (config.enable_imdkit && xcb->ic) {
+      g_log("IMDKit", G_LOG_LEVEL_DEBUG, "press key %d to xim", xkpe->detail);
+      xcb_xim_forward_event(xcb->im, xcb->ic, xkpe);
+      return;
+    } else
+#endif
+    {
+      rofi_key_press_event_handler(xkpe, state);
     }
     break;
   }
   case XCB_KEY_RELEASE: {
     xcb_key_release_event_t *xkre = (xcb_key_release_event_t *)event;
-    xcb->last_timestamp = xkre->time;
-    nk_bindings_seat_handle_key(xcb->bindings_seat, NULL, xkre->detail,
-                                NK_BINDINGS_KEY_STATE_RELEASE);
+#ifdef XCB_IMDKIT
+    if (config.enable_imdkit && xcb->ic) {
+      g_log("IMDKit", G_LOG_LEVEL_DEBUG, "release key %d to xim", xkre->detail);
+
+      // Work around rapid modifier release events that xcb-imdkit can miss.
+      xcb_keysym_t sym =
+          xcb_key_press_lookup_keysym(xcb->syms,
+                                      (xcb_key_press_event_t *)xkre, 0);
+      if (xcb_is_modifier_key(sym)) {
+        struct timespec five_millis = {.tv_sec = 0, .tv_nsec = 5000000};
+        nanosleep(&five_millis, NULL);
+      }
+      xcb_xim_forward_event(xcb->im, xcb->ic, xkre);
+      return;
+    } else
+#endif
+    {
+      rofi_key_release_event_handler(xkre, state);
+    }
     break;
   }
   default:
@@ -1284,6 +1332,27 @@ static void main_loop_x11_event_handler_view(xcb_generic_event_t *event) {
   }
   rofi_view_maybe_update(state);
 }
+
+#ifdef XCB_IMDKIT
+void x11_event_handler_fowarding(G_GNUC_UNUSED xcb_xim_t *im,
+                                 G_GNUC_UNUSED xcb_xic_t ic,
+                                 xcb_key_press_event_t *event,
+                                 G_GNUC_UNUSED void *user_data) {
+  RofiViewState *state = rofi_view_get_active();
+  if (state == NULL) {
+    return;
+  }
+
+  uint8_t type = event->response_type & ~0x80;
+  if (type == XCB_KEY_PRESS) {
+    rofi_key_press_event_handler(event, state);
+  } else if (type == XCB_KEY_RELEASE) {
+    xcb_key_release_event_t *xkre = (xcb_key_release_event_t *)event;
+    rofi_key_release_event_handler(xkre, state);
+  }
+  rofi_view_maybe_update(state);
+}
+#endif
 
 static gboolean main_loop_x11_event_handler(xcb_generic_event_t *ev,
                                             G_GNUC_UNUSED gpointer user_data) {
@@ -1299,6 +1368,13 @@ static gboolean main_loop_x11_event_handler(xcb_generic_event_t *ev,
     //g_warning("main_loop_x11_event_handler: ev == NULL, status == %d", status);
     return G_SOURCE_CONTINUE;
   }
+
+#ifdef XCB_IMDKIT
+  if (config.enable_imdkit && xcb->im && xcb_xim_filter_event(xcb->im, ev)) {
+    return G_SOURCE_CONTINUE;
+  }
+#endif
+
   uint8_t type = ev->response_type & ~0x80;
   if (type == xcb->xkb.first_event) {
     switch (ev->pad0) {
@@ -1495,6 +1571,11 @@ gboolean display_setup(GMainLoop *main_loop, NkBindings *bindings) {
   find_arg_str("-display", &display_str);
 
   xcb->main_loop = main_loop;
+#ifdef XCB_IMDKIT
+  if (config.enable_imdkit) {
+    xcb_compound_text_init();
+  }
+#endif
   xcb->source = g_water_xcb_source_new(g_main_loop_get_context(xcb->main_loop),
                                        display_str, &xcb->screen_nbr,
                                        main_loop_x11_event_handler, NULL, NULL);
@@ -1503,6 +1584,24 @@ gboolean display_setup(GMainLoop *main_loop, NkBindings *bindings) {
     return FALSE;
   }
   xcb->connection = g_water_xcb_source_get_connection(xcb->source);
+#ifdef XCB_IMDKIT
+  if (config.enable_imdkit) {
+    xcb->im = xcb_xim_create(xcb->connection, xcb->screen_nbr, NULL);
+    xcb->syms = xcb_key_symbols_alloc(xcb->connection);
+  } else {
+    xcb->im = NULL;
+    xcb->syms = NULL;
+  }
+#endif
+
+#ifdef XCB_IMDKIT
+#ifndef XCB_IMDKIT_1_0_3_LOWER
+  if (config.enable_imdkit) {
+    xcb_xim_set_use_compound_text(xcb->im, true);
+    xcb_xim_set_use_utf8_string(xcb->im, true);
+  }
+#endif
+#endif
 
   TICK_N("Open Display");
 
@@ -1772,6 +1871,13 @@ void display_cleanup(void) {
   xcb_ewmh_connection_wipe(&(xcb->ewmh));
   xcb_flush(xcb->connection);
   xcb_aux_sync(xcb->connection);
+#ifdef XCB_IMDKIT
+  if (config.enable_imdkit) {
+    xcb_xim_close(xcb->im);
+    xcb_xim_destroy(xcb->im);
+    xcb->im = NULL;
+  }
+#endif
   g_water_xcb_source_free(xcb->source);
   xcb->source = NULL;
   xcb->connection = NULL;

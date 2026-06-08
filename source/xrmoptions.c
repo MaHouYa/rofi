@@ -439,6 +439,12 @@ static XrmOption xrmOptions[] = {
      NULL,
      "Workaround for XServer issue #300 (issue #611 for rofi.)",
      CONFIG_DEFAULT},
+    {xrm_Boolean,
+     "imdkit",
+     {.snum = &config.enable_imdkit},
+     NULL,
+     "Whether to enable imdkit",
+     CONFIG_DEFAULT},
 };
 
 /** Dynamic array of extra options */

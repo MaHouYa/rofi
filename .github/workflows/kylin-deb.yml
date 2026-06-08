@@ -1,0 +1,78 @@
+name: Build Kylin Debian Package
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-kylin-deb:
+    runs-on: kylin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config autoconf automake libtool
+          sudo apt-get install -y curl ca-certificates
+          sudo apt-get install -y libpango1.0-dev libstartup-notification0-dev
+          sudo apt-get install -y libxcb-ewmh-dev libxcb-icccm4-dev libxcb-randr0-dev
+          sudo apt-get install -y libxcb-util0-dev libxcb-xinerama0-dev libxcb-xkb-dev
+          sudo apt-get install -y libxcb-xrm-dev libxcb-cursor-dev libxcb-keysyms1-dev
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev
+          sudo apt-get install -y libgdk-pixbuf2.0-dev libglib2.0-dev
+          sudo apt-get install -y flex bison
+
+      - name: Build xcb-imdkit
+        run: |
+          curl -L https://github.com/fcitx/xcb-imdkit/archive/refs/tags/1.0.3.tar.gz | tar xzf -
+          cd xcb-imdkit-1.0.3
+          mkdir build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/.local -DBUILD_SHARED_LIBS=OFF
+          make -j$(nproc)
+          make install
+
+      - name: Build rofi
+        run: |
+          export PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig:$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
+          autoreconf --install
+          mkdir builddir
+          cd builddir
+          ../configure --enable-windowmode --enable-imdkit --disable-check
+          make -j$(nproc)
+
+      - name: Build Debian package
+        run: |
+          cd builddir
+          make install DESTDIR="$(pwd)/deb-root"
+          mkdir -p deb-root/DEBIAN
+          cat > deb-root/DEBIAN/control << 'CONTROL'
+          Package: rofi
+          Version: 1.7.5
+          Section: x11
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Rofi Maintainers <noreply@github.com>
+          Depends: libc6, libcairo2, libgdk-pixbuf2.0-0, libglib2.0-0,
+           libpango-1.0-0, libpangocairo-1.0-0, libstartup-notification0,
+           libxcb-cursor0, libxcb-ewmh2, libxcb-icccm4, libxcb-keysyms1,
+           libxcb-randr0, libxcb-util1, libxcb-xinerama0, libxcb-xkb1,
+           libxcb-xrm0, libxcb1, libxkbcommon-x11-0, libxkbcommon0
+          Description: A window switcher, application launcher and dmenu replacement (with IME support)
+          CONTROL
+          dpkg-deb --build deb-root rofi_1.7.5_amd64.deb
+
+      - name: Upload Kylin Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rofi-kylin-deb
+          path: builddir/rofi_1.7.5_amd64.deb

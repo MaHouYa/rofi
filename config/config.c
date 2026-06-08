@@ -158,4 +158,6 @@ Settings config = {
     .refilter_timeout_limit = 8192,
     /** workaround for broken xserver (#300 on xserver, #611) */
     .xserver_i300_workaround = FALSE,
+    /** Whether to enable imdkit, see #2123 */
+    .enable_imdkit = TRUE,
 };

@@ -184,6 +184,9 @@ typedef struct {
 
   /** workaround for broken xserver (#300 on xserver, #611) */
   gboolean xserver_i300_workaround;
+
+  /** Whether to enable imdkit, see #2123 */
+  gboolean enable_imdkit;
 } Settings;
 
 /** Default number of lines in the list view */
